@@ -59,10 +59,16 @@ Running the application
 
 2. Run ``python openDAM`` from the master directory with either the ``--all`` option, or another option if you want to run a particular day.
 
-Please refer to the examples 
+========
+GME Data
+========
 
-.. toctree::
-  :maxdepth: 2
-  
-  examples
+Raw data for the GME market can be obtained `here. <https://dox.uliege.be/index.php/s/IcRkhmfBZqzIBRJ>`__
+You can import this data by running ``python openDAM/dataio/GME_xml_importer.py``.
 
+==============================
+Generating random block orders
+==============================
+
+Random block orders can be added to a database by running ``python openDAM/dataio/generate_block_orders.py``.
+Parameters defining block properties must be modified directly inside this file (they are not accessible through command line arguments).
