@@ -48,9 +48,9 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--database",
                         help="Name of the sqlite database file, under the folder of the --path argument.", required=True)
     parser.add_argument("--from_date", help="Date of first day to import, as YYYYMMDD, cast as an int.",
-                        default='20180101', required=True)
+                        required=True)
     parser.add_argument("--to_date", help="Date of last day to import, as YYYYMMDD, cast as an int.",
-                        default='20180110', required=True)
+                        required=True)
     parser.add_argument("--create_tables", help="True if block related tables must be created", default=False)
     parser.add_argument("--seed", help="Seed for random number generation", default=1984)
 
@@ -59,7 +59,7 @@ if __name__ == "__main__":
     conn = sqlite3.connect('%s/%s' % (args.path, args.database))
 
     if args.create_tables:
-        create_tables(conn)
+        create_tables(conn, ["BLOCKS", "BLOCK_DATA"])
 
     cursor = conn.cursor()
     cmd = "delete from BLOCKS"

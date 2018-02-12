@@ -18,14 +18,15 @@ TABLES = dict(
     DAYS='DAY_ID INTEGER, NPERIODS INTEGER')
 
 
-def create_tables(conn):
+def create_tables(conn, tables=None):
     """
 
     :param conn: a connection to the database.
     """
     curs = conn.cursor()
 
-    for table in TABLES.keys():
+
+    for table in TABLES.keys() if not tables else tables:
         curs.execute("CREATE TABLE %s (%s);" % (table, TABLES[table]))
 
 

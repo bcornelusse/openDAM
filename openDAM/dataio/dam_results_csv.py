@@ -42,11 +42,11 @@ class CSV_writer:
         self.pun = open('%s/pun_results_PD.csv' % self.path, status)
 
     def write_headers(self):
-        self.welfare.write('DAY_ID,WELFARE,TIME,NBIN\n')
+        self.welfare.write('DAY_ID,WELFARE,TIME,NBIN,EXPANSION\n')
         self.prices.write('DAY_ID,ZONE_ID,ZONE_NAME,PERIOD,PRICE,MATCHED_SUPPLY_VOLUME,MATCHED_DEMAND_VOLUME\n')
         self.line.write('DAY_ID,LINE_ID, descritption, direction, value\n')
         self.complex.write('DAY_ID,COMPLEX_ID,ACCEPT,SURPLUS,\n')
-        self.complex.write('DAY_ID,BLOCK_ID,ACCEPT,SURPLUS,\n')
+        self.block.write('DAY_ID,BLOCK_ID,ACCEPT,SURPLUS,\n')
         self.pun.write('DAY_ID,PUN_ID,ACCEPT\n')
 
     def update(self, dam):
@@ -55,7 +55,7 @@ class CSV_writer:
         day = dam.day_id
         logging.info('Updating results for day %d' % day)
 
-        self.welfare.write('%d,%f,%.2f,%d\n' % (day, dam.welfare, dam.t_solve, dam.nbinvar))
+        self.welfare.write('%d,%f,%.2f,%d,%d\n' % (day, dam.welfare, dam.t_solve, dam.nbinvar, dam.expansion))
 
         # WRITE price results
         all_zones = dam.zones.keys()
@@ -83,7 +83,12 @@ class CSV_writer:
             self.line.write('%d,%d,shadow,DOWN,%s\n' % (day, l.line_id, ','.join([str(v) for v in l.congestion_down])))
 
         for b in dam.block_orders:
-            self.block.write('%d,%d,%.6f\n' % (day, b.id, b.acceptance))
+            V = b.total_volume()
+            l = b.location
+            P = b.price
+            zonal_prices = dam.prices(l)
+            surplus = sum([zonal_prices[t] * v for t, v in b.volumes.items()]) - P * V
+            self.block.write('%d,%d,%.6f,%.2f\n' % (day, b.id, b.acceptance, surplus))
 
         # WRITE results related to complex orders
         if isinstance(dam, COMPLEX_DAM):

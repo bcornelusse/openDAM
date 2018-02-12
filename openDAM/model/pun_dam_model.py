@@ -958,6 +958,15 @@ class PUN_DAM(DAM):
         self.welfare = value(model.obj)
         logging.info("welfare: %.2f" % value(self.welfare))
 
+        self.expansion = False
+        try:
+            for p in model.udk:
+                if value(model.udk[p]) == 1:
+                    self.expansion = True
+                    break
+        except Exception as e:
+            print(e)
+
         for i in model.demandBids:
             bid = book.bids[i]
 
