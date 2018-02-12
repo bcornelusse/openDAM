@@ -1,3 +1,19 @@
+=============
+Documentation
+=============
+
+`Read the doc <http://openDAM.readthedocs.io/en/latest/>`__ for more information.
+
+Alternatively you can generate the documentation yourself if you have sphinx installed:
+
+::
+
+    cd <to the root of the project>
+    sphinx-apidoc -o doc/ openDAM/ -f --separate
+    cd doc; make html; cd ..
+
+The html doc is in ``_build/html``
+
 ============
 Installation
 ============
@@ -33,6 +49,7 @@ Installation
 
 The code is currently tuned for CPLEX.
 
+=======================
 Running the application
 =======================
 
@@ -49,17 +66,3 @@ Please refer to the examples
   
   examples
 
-Documentation
-=============
-
-`Read the doc <http://openDAM.readthedocs.io/en/latest/>`__ for more information.
-
-Alternatively you can generate the documentation yourself if you have sphinx installed:
-
-::
-
-    cd <to the root of the project>
-    sphinx-apidoc -o doc/ openDAM/ -f --separate
-    cd doc; make html; cd ..
-
-The html doc is in ``_build/html``
