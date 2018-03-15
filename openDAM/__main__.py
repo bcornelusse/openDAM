@@ -37,14 +37,25 @@ def run(path, database, case_list, log_level, pun_strategy):
     for case in cases:
         dam = loader.read_day(case)
         dam.create_model()
-        if isinstance(dam, PUN_DAM):
-            dam.solve(VERBOSE=True, strategy=pun_strategy)
-            writer.update(dam)
-        else:
-            dam.create_model()
-            dam.solve(VERBOSE=VERBOSE)
-            if options.PRIMAL and options.DUAL:
+        try:
+            if isinstance(dam, PUN_DAM):
+                try:
+                    options.SOLVER.options["simplex tolerances optimality"] = 1e-9
+                    options.SOLVER.options["simplex tolerances feasibility"] = 1e-9
+                    dam.solve(VERBOSE=True, strategy=pun_strategy)
+                except:
+                    print("Could not solve %d, loosening tolerances" % case)
+                    options.SOLVER.options["simplex tolerances optimality"] = 1e-6
+                    options.SOLVER.options["simplex tolerances feasibility"] = 1e-6
+                    dam.solve(VERBOSE=True, strategy=pun_strategy)
                 writer.update(dam)
+            else:
+                dam.create_model()
+                dam.solve(VERBOSE=VERBOSE)
+                if options.PRIMAL and options.DUAL:
+                    writer.update(dam)
+        except:
+            print("Could not solve %d" % case)
 
         writer.close_files()
 

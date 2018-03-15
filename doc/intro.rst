@@ -4,7 +4,8 @@ Introduction
 
 This Python package is an open source implementation of formulations and algorithms for the European day-ahead market coupling problem.
 
-It is based on scientific articles, published or under review, authored by (in random order) Mehdi Madani, Mathieu Van Vyve, Iacopo Savelli, Antonio Giannitrapani, Simone Paoletti, Antonio Vicino and Bertrand Cornélusse.
+It is based on scientific articles, published or under review, authored by (in random order) Mehdi Madani, Mathieu Van Vyve, Iacopo Savelli,
+Antonio Giannitrapani, Simone Paoletti, Antonio Vicino and Bertrand Cornélusse.
 
 It includes functionalities for
 

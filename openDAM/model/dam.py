@@ -4,7 +4,7 @@ import time
 
 from pyomo.core.base import Constraint, summation, Objective, minimize, ConstraintList, \
     ConcreteModel, Set, RangeSet, Reals, Binary, NonNegativeReals, Var, maximize, Suffix
-#from pyomo.core.kernel import value  # Looks like value method changed location in new pyomo version ?
+from pyomo.core.kernel import value  # Looks like value method changed location in new pyomo version ?
 from pyomo.environ import *  # Must be kept
 from pyomo.opt import ProblemFormat, SolverStatus, TerminationCondition
 
@@ -88,7 +88,12 @@ class DAM:
         pass
 
     @abstractmethod
-    def _build_solution(self):
+    def _build_solution(self, results=None):
+        """
+
+        :param results: Pyomo results object
+        :return:
+        """
         pass
 
     def exportModel(self):

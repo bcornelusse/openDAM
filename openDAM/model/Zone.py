@@ -15,3 +15,6 @@ class Zone:
         self.minimum_price = minimum_price
         self.maximum_price = maximum_price
 
+    def __str__(self):
+        print("Zone %s,id %d" % (self.name, self.id))
+

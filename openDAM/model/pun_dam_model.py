@@ -2,7 +2,7 @@ from openDAM.model.dam import DAM
 
 from pyomo.core.base import Constraint, summation, Objective, minimize, ConstraintList, \
     ConcreteModel, Set, RangeSet, Reals, Binary, NonNegativeReals, Var, maximize, Suffix
-#from pyomo.core.kernel import value  # Looks like value method changed location in new pyomo version ?
+from pyomo.core.kernel import value  # Looks like value method changed location in new pyomo version ?
 from pyomo.environ import *  # Must be kept
 from pyomo.opt import ProblemFormat, SolverStatus, TerminationCondition
 
@@ -11,6 +11,8 @@ import openDAM.conf.options as options
 import logging
 
 import time
+
+import itertools
 
 
 class PUN_DAM(DAM):
@@ -70,6 +72,7 @@ class PUN_DAM(DAM):
         model.bids = Set(initialize=range(len(book.bids)))
         model.L = Set(initialize=self.zones.keys())
         model.Lpun = Set(initialize=pun_zones)
+        model.LpunExt = Set(initialize=[z for z in self.zones if z in pun_zones or self.zones[z].name == "ROSN"])
         model.demandBids = Set(
             initialize=[i for i in range(len(book.bids)) if
                         (book.bids[i].type == 'SB' and book.bids[i].volume < 0)])
@@ -81,21 +84,25 @@ class PUN_DAM(DAM):
         model.punBids = Set(
             initialize=[i for i in range(len(book.bids)) if book.bids[i].type == 'PO'])
         model.C = RangeSet(len(self.connections))
-        model.binary_powers = Set(initialize=range(19))
+        model.binary_powers = Set(initialize=range(options.BINARY_EXP_NUMBER))
 
         # Number of binary variables. Must be decreased if the binary is fixed.
         # ugk, uek, uwd, udd = 4*len(model.punBids)
         # bexp = len(model.Lpun)*len(model.binary_powers)*len(model.periods)
-        # uf = len(model.Lpun)*len(model.Lpun)*len(model.periods)
+        # uf = len(model.LpunExt)*len(model.LpunExt)*len(model.periods)
+        # ubp = len(model.bBids)
         self.nbinvar = 4 * len(model.punBids) \
                        + len(model.Lpun) * len(model.binary_powers) * len(model.periods) \
-                       + len(model.Lpun) * len(model.Lpun) * len(model.periods) \
                        + len(model.bBids)
+        if options.SPLIT:
+            self.nbinvar += len(model.LpunExt) * len(model.LpunExt) * len(model.periods)
+
+        self.nbinvar_initial = self.nbinvar
 
         # Big Ms
         MAX_PRICE = self.priceCap[1]
         MIN_PRICE = self.priceCap[0]
-        PUN_EPSILON = 1e-6
+        PUN_EPSILON = 1e-8
         UF_EPSILON = 1e-6
         M_pun_itm = MAX_PRICE + 1
         M_pun_atm = MAX_PRICE  # TODO ensure right value
@@ -108,7 +115,6 @@ class PUN_DAM(DAM):
         M_ugtk_non_pun_lower = MIN_PRICE
         M_udtk_lower = MIN_PRICE
         M_udtk_upper = MAX_PRICE
-        M_ATM_split = 10000
         M_block_surplus = MAX_PRICE - MIN_PRICE
 
         if options.DEBUG:
@@ -133,7 +139,8 @@ class PUN_DAM(DAM):
             model.uek = Var(model.punBids, domain=Binary)  # PUN
             model.uwk = Var(model.punBids, domain=Binary)  # PUN
             model.udk = Var(model.punBids, domain=Binary)  # PUN
-            model.uf = Var(model.Lpun, model.Lpun, model.periods, domain=Binary)
+            if options.SPLIT:
+                model.uf = Var(model.LpunExt, model.LpunExt, model.periods, domain=Binary)
 
             # Dual
             model.pi = Var(model.periods, domain=Reals)
@@ -198,6 +205,8 @@ class PUN_DAM(DAM):
 
         # Upper level constraints
         def p_pun_itm_le_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             bid = book.bids[b]
             return bid.price - m.pi[bid.period] <= M_pun_itm * m.ugk[b]
 
@@ -205,6 +214,8 @@ class PUN_DAM(DAM):
             model.p_pun_itm_le = Constraint(model.punBids, rule=p_pun_itm_le_rule)
 
         def p_pun_itm_ge_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             bid = book.bids[b]
             return bid.price - m.pi[bid.period] >= PUN_EPSILON - M_pun_itm * (1 - m.ugk[b])
 
@@ -212,6 +223,8 @@ class PUN_DAM(DAM):
             model.p_pun_itm_ge = Constraint(model.punBids, rule=p_pun_itm_ge_rule)
 
         def p_pun_atm_le_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             bid = book.bids[b]
             return bid.price - m.pi[bid.period] <= M_pun_atm * (1 - m.uek[b])
 
@@ -219,6 +232,8 @@ class PUN_DAM(DAM):
             model.p_pun_atm_le = Constraint(model.punBids, rule=p_pun_atm_le_rule)
 
         def p_pun_atm_ge_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             bid = book.bids[b]
             return bid.price - m.pi[bid.period] >= -M_pun_atm * (1 - m.uek[b])
 
@@ -226,24 +241,32 @@ class PUN_DAM(DAM):
             model.p_pun_atm_ge = Constraint(model.punBids, rule=p_pun_atm_ge_rule)
 
         def p_pun_atm_welfare_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             return m.uwk[b] <= m.uek[b]
 
         if not relax_PUN:
             model.p_pun_atm_welfare = Constraint(model.punBids, rule=p_pun_atm_welfare_rule)
 
         def p_pun_atm_dispatch_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             return m.udk[b] <= m.uek[b]
 
         if not relax_PUN:
             model.p_pun_atm_dispatch = Constraint(model.punBids, rule=p_pun_atm_dispatch_rule)
 
         def p_pun_atm_welfare_xor_dispatch_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             return m.udk[b] <= 1 - m.uwk[b]
 
         if not relax_PUN:
             model.p_pun_atm_welfare_xor_dispatch = Constraint(model.punBids, rule=p_pun_atm_welfare_xor_dispatch_rule)
 
         def p_pun_atm_quantity_dispatch_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             bid = book.bids[b]
             return m.ddk[b] <= bid.volume * m.udk[b]
 
@@ -311,79 +334,278 @@ class PUN_DAM(DAM):
         if options.DEBUG:
             logging.info("Creating ATM merit order constraints depending on market split")
 
-        if False and not relax_PUN:
+        if not relax_PUN:
             order_idx = 0
-            for (h, k) in model.punBids * model.punBids:
-                # skip price=3000 case
-                if book.bids[k].price != 3000 \
-                        and book.bids[h].merit_order < book.bids[k].merit_order \
-                        and book.bids[h].price == book.bids[k].price \
-                        and book.bids[h].period == book.bids[k].period:
-                    p = book.bids[h].period
-                    i = book.bids[h].location
-                    j = book.bids[k].location
-                    # same zone
-                    if i == j:
-                        expr = model.dwk[h] + model.ddk[h] >= book.bids[h].volume * model.uek[k]
-                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
-                        order_idx += 1
+            for p in model.periods:
+                for hBid in self.pun_orders_by_period[p]:
+                    # skip price=3000 case
+                    if hBid.price == MAX_PRICE:
                         continue
-                    # zone connected directly
-                    if model.flow_max[i, j, p] > 0 or model.flow_max[j, i, p] > 0:
-                        expr = model.dwk[h] + model.ddk[h] >= book.bids[h].volume * model.uek[k] \
-                               - M_ATM_split * model.uf[i, j, p] - M_ATM_split * model.uf[j, i, p]
-                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
-                        order_idx += 1
-                        continue
-                    # zones connected with one, two, ore three middle zones
-                    remaining_zones = model.Lpun - Set(initialize=[i, j])
-                    for z1, z2, z3 in remaining_zones * remaining_zones * remaining_zones:
-                        # one zone in the middle
-                        if (model.flow_max[i, z1, p] > 0 and model.flow_max[z1, j, p] > 0) \
-                                or \
-                                (model.flow_max[j, z1, p] > 0 and model.flow_max[z1, i, p] > 0):
-                            expr = model.dwk[h] + model.ddk[h] >= book.bids[h].volume * model.uek[k] \
-                                   - M_ATM_split * model.uf[i, z1, p] - M_ATM_split * model.uf[z1, i, p] \
-                                   - M_ATM_split * model.uf[z1, j, p] - M_ATM_split * model.uf[j, z1, p]
-                            setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
-                            order_idx += 1
-                            break
-                        # two zones in the middle
-                        if (model.flow_max[i, z1, p] > 0 and model.flow_max[z1, z2, p] > 0 and model.flow_max[
-                            z2, j, p] > 0) \
-                                or \
-                                (model.flow_max[j, z2, p] > 0 and model.flow_max[z2, z1, p] > 0 and model.flow_max[
-                                    z1, i, p] > 0):
-                            expr = model.dwk[h] + model.ddk[h] >= book.bids[h].volume * model.uek[k] \
-                                   - M_ATM_split * model.uf[i, z1, p] - M_ATM_split * model.uf[z1, i, p] \
-                                   - M_ATM_split * model.uf[z1, z2, p] - M_ATM_split * model.uf[z2, z1, p] \
-                                   - M_ATM_split * model.uf[z2, j, p] - M_ATM_split * model.uf[j, z2, p]
-                            setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
-                            order_idx += 1
-                            break
-                        # three zones in the middle
-                        if (model.flow_max[i, z1, p] > 0 and model.flow_max[z1, z2, p] > 0 and model.flow_max[
-                            z2, z3, p] > 0 and model.flow_max[z3, j, p] > 0) \
-                                or \
-                                (model.flow_max[j, z3, p] > 0 and model.flow_max[z3, z2, p] > 0 and model.flow_max[
-                                    z2, z1, p] > 0 and model.flow_max[z1, i, p] > 0):
-                            expr = model.dwk[h] + model.ddk[h] >= book.bids[h].volume * model.uek[k] \
-                                   - M_ATM_split * model.uf[i, z1, p] - M_ATM_split * model.uf[z1, i, p] \
-                                   - M_ATM_split * model.uf[z1, z2, p] - M_ATM_split * model.uf[z2, z1, p] \
-                                   - M_ATM_split * model.uf[z2, z3, p] - M_ATM_split * model.uf[z3, z2, p] \
-                                   - M_ATM_split * model.uf[z3, j, p] - M_ATM_split * model.uf[j, z3, p]
-                            setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
-                            order_idx += 1
-                            break
+                    h = self.pun_orders_ids[hBid]
+                    for kBid in self.pun_orders_by_period[p]:
+                        # skip price=3000 case
+                        if kBid.price == MAX_PRICE:
+                            continue
+                        k = self.pun_orders_ids[kBid]
+                        if hBid.merit_order < kBid.merit_order \
+                                and hBid.price == kBid.price:
+                            i = hBid.location
+                            j = kBid.location
+                            # same zone
+                            if i == j:
+                                expr = model.dwk[h] + model.ddk[h] >= hBid.volume * model.uek[k]
+                                setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                order_idx += 1
+
+                                expr = model.uek[h] >= model.uek[k]
+                                setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                order_idx += 1
+
+                                expr = model.ddk[h] >= hBid.volume * model.udk[k]
+                                setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                order_idx += 1
+
+                                #print book.bids[h].id, book.bids[k].id, self.zones[i].name
+
+                                continue
+
+                            if options.SPLIT:
+                                # zone connected directly
+                                if model.flow_max[i, j, p] > 0 or model.flow_max[j, i, p] > 0:
+                                    expr = model.dwk[h] + model.ddk[h] >= hBid.volume * model.uek[k] \
+                                           - hBid.volume * model.uf[i, j, p] - hBid.volume * model.uf[
+                                               j, i, p]
+                                    setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                    order_idx += 1
+
+                                    expr = model.uek[h] >= model.uek[k] \
+                                           - model.uf[i, j, p] - model.uf[j, i, p]
+                                    setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                    order_idx += 1
+
+                                    expr = model.ddk[h] >= hBid.volume * model.udk[k] \
+                                           - hBid.volume * model.uf[i, j, p] - hBid.volume * model.uf[
+                                               j, i, p]
+                                    setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                    order_idx += 1
+
+                                    #print book.bids[h].id, book.bids[k].id, self.zones[i].name, "->", self.zones[j].name
+
+                                    continue
+
+                                # zones connected with 1, 2, 3, or 4 middle zones
+                                remaining_zones = model.LpunExt.data() - set([i, j])
+
+                                middle_zones = set((z1, z2, z3, z4) for (z1, z2, z3, z4)
+                                                in itertools.product(remaining_zones, remaining_zones, remaining_zones, remaining_zones)
+                                                if z1 != z2 and z1 != z3 and z1 != z4 \
+                                                            and z2 != z3 and z2 != z4 \
+                                                                         and z3 != z4)
+                                processed = set()
+                                for (z1, z2, z3, z4) in middle_zones:
+                                    # one zone in the middle
+                                    if (model.flow_max[i, z1, p] > 0 and model.flow_max[z1, j, p] > 0) \
+                                            or \
+                                            (model.flow_max[j, z1, p] > 0 and model.flow_max[z1, i, p] > 0):
+
+                                        if (i,z1,j) in processed:
+                                            continue
+                                        else:
+                                            processed.add((i, z1, j))
+                                            processed.add((j, z1, i))
+
+                                        expr = model.dwk[h] + model.ddk[h] >= hBid.volume * model.uek[k] \
+                                               - hBid.volume * model.uf[i, z1, p] - hBid.volume * \
+                                               model.uf[z1, i, p] \
+                                               - hBid.volume * model.uf[z1, j, p] - hBid.volume * \
+                                               model.uf[j, z1, p]
+                                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                        order_idx += 1
+
+                                        expr = model.uek[h] >= model.uek[k] \
+                                               - model.uf[i, z1, p] - model.uf[z1, i, p] \
+                                               - model.uf[z1, j, p] - model.uf[j, z1, p]
+                                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                        order_idx += 1
+
+                                        expr = model.ddk[h] >= hBid.volume * model.udk[k] \
+                                               - hBid.volume * model.uf[i, z1, p] - hBid.volume * \
+                                               model.uf[z1, i, p] \
+                                               - hBid.volume * model.uf[z1, j, p] - hBid.volume * \
+                                               model.uf[j, z1, p]
+                                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                        order_idx += 1
+
+                                        #print book.bids[h].id, book.bids[k].id, self.zones[i].name, "->", self.zones[z1].name, "->", self.zones[j].name
+
+
+                                    # two zones in the middle
+                                    if (model.flow_max[i, z1, p] > 0 and model.flow_max[z1, z2, p] > 0 and
+                                        model.flow_max[
+                                            z2, j, p] > 0) \
+                                            or \
+                                            (model.flow_max[j, z2, p] > 0 and model.flow_max[z2, z1, p] > 0 and
+                                             model.flow_max[
+                                                 z1, i, p] > 0):
+
+                                        if (i,z1,z2,j) in processed:
+                                            continue
+                                        else:
+                                            processed.add((i, z1, z2, j))
+                                            processed.add((j, z2, z1, i))
+
+                                        expr = model.dwk[h] + model.ddk[h] >= hBid.volume * model.uek[k] \
+                                               - hBid.volume * model.uf[i, z1, p] - hBid.volume * \
+                                               model.uf[z1, i, p] \
+                                               - hBid.volume * model.uf[z1, z2, p] - hBid.volume * \
+                                               model.uf[z2, z1, p] \
+                                               - hBid.volume * model.uf[z2, j, p] - hBid.volume * \
+                                               model.uf[j, z2, p]
+                                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                        order_idx += 1
+
+                                        expr = model.uek[h] >= model.uek[k] \
+                                               - model.uf[i, z1, p] - model.uf[z1, i, p] \
+                                               - model.uf[z1, z2, p] - model.uf[z2, z1, p] \
+                                               - model.uf[z2, j, p] - model.uf[j, z2, p]
+                                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                        order_idx += 1
+
+                                        expr = model.ddk[h] >= hBid.volume * model.udk[k] \
+                                               - hBid.volume * model.uf[i, z1, p] - hBid.volume * \
+                                               model.uf[z1, i, p] \
+                                               - hBid.volume * model.uf[z1, z2, p] - hBid.volume * \
+                                               model.uf[z2, z1, p] \
+                                               - hBid.volume * model.uf[z2, j, p] - hBid.volume * \
+                                               model.uf[j, z2, p]
+                                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                        order_idx += 1
+
+                                        #print book.bids[h].id, book.bids[k].id, self.zones[i].name, "->", self.zones[z1].name, "->", \
+                                        #      self.zones[z2].name, "->", self.zones[j].name
+
+
+
+                                    # three zones in the middle
+                                    if (model.flow_max[i, z1, p] > 0 and model.flow_max[z1, z2, p] > 0 and
+                                        model.flow_max[
+                                            z2, z3, p] > 0 and model.flow_max[z3, j, p] > 0) \
+                                            or \
+                                            (model.flow_max[j, z3, p] > 0 and model.flow_max[z3, z2, p] > 0 and
+                                             model.flow_max[
+                                                 z2, z1, p] > 0 and model.flow_max[z1, i, p] > 0):
+
+                                        if (i,z1,z2,z3,j) in processed:
+                                            continue
+                                        else:
+                                            processed.add((i, z1, z2, z3, j))
+                                            processed.add((j, z3, z2, z1, i))
+
+                                        expr = model.dwk[h] + model.ddk[h] >= hBid.volume * model.uek[k] \
+                                               - hBid.volume * model.uf[i, z1, p] - hBid.volume * \
+                                               model.uf[z1, i, p] \
+                                               - hBid.volume * model.uf[z1, z2, p] - hBid.volume * \
+                                               model.uf[z2, z1, p] \
+                                               - hBid.volume * model.uf[z2, z3, p] - hBid.volume * \
+                                               model.uf[z3, z2, p] \
+                                               - hBid.volume * model.uf[z3, j, p] - hBid.volume * \
+                                               model.uf[j, z3, p]
+                                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                        order_idx += 1
+
+                                        expr = model.uek[h] >= model.uek[k] \
+                                               - model.uf[i, z1, p] - model.uf[z1, i, p] \
+                                               - model.uf[z1, z2, p] - model.uf[z2, z1, p] \
+                                               - model.uf[z2, z3, p] - model.uf[z3, z2, p] \
+                                               - model.uf[z3, j, p] - model.uf[j, z3, p]
+                                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                        order_idx += 1
+
+                                        expr = model.ddk[h] >= hBid.volume * model.udk[k] \
+                                               - hBid.volume * model.uf[i, z1, p] - hBid.volume * \
+                                               model.uf[z1, i, p] \
+                                               - hBid.volume * model.uf[z1, z2, p] - hBid.volume * \
+                                               model.uf[z2, z1, p] \
+                                               - hBid.volume * model.uf[z2, z3, p] - hBid.volume * \
+                                               model.uf[z3, z2, p] \
+                                               - hBid.volume * model.uf[z3, j, p] - hBid.volume * \
+                                               model.uf[j, z3, p]
+                                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                        order_idx += 1
+
+                                        #print book.bids[h].id, book.bids[k].id, self.zones[i].name, "->", self.zones[z1].name, "->", \
+                                        #    self.zones[z2].name, "->", self.zones[z3].name, "->", self.zones[j].name
+
+
+
+                                    # 4 zones in the middle
+                                    if (model.flow_max[i, z1, p] > 0 and model.flow_max[z1, z2, p] > 0 and
+                                        model.flow_max[
+                                            z2, z3, p] > 0 and model.flow_max[z3, z4, p] > 0 and model.flow_max[
+                                            z4, j, p] > 0) \
+                                            or \
+                                            (model.flow_max[j, z4, p] > 0 and model.flow_max[z4, z3, p] > 0 and
+                                             model.flow_max[
+                                                 z3, z2, p] > 0 and model.flow_max[z2, z1, p] > 0 and model.flow_max[
+                                                 z1, i, p] > 0):
+
+                                        if (i,z1,z2,z3,z4,j) in processed:
+                                            continue
+                                        else:
+                                            processed.add((i, z1, z2, z3, z4, j))
+                                            processed.add((j, z4, z3, z2, z1, i))
+
+                                        expr = model.dwk[h] + model.ddk[h] >= hBid.volume * model.uek[k] \
+                                               - hBid.volume * model.uf[i, z1, p] - hBid.volume * \
+                                               model.uf[z1, i, p] \
+                                               - hBid.volume * model.uf[z1, z2, p] - hBid.volume * \
+                                               model.uf[z2, z1, p] \
+                                               - hBid.volume * model.uf[z2, z3, p] - hBid.volume * \
+                                               model.uf[z3, z2, p] \
+                                               - hBid.volume * model.uf[z3, z4, p] - hBid.volume * \
+                                               model.uf[z4, z3, p] \
+                                               - hBid.volume * model.uf[z4, j, p] - hBid.volume * \
+                                               model.uf[j, z4, p]
+                                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                        order_idx += 1
+
+                                        expr = model.uek[h] >= model.uek[k] \
+                                               - model.uf[i, z1, p] - model.uf[z1, i, p] \
+                                               - model.uf[z1, z2, p] - model.uf[z2, z1, p] \
+                                               - model.uf[z2, z3, p] - model.uf[z3, z2, p] \
+                                               - model.uf[z3, z4, p] - model.uf[z4, z3, p] \
+                                               - model.uf[z4, j, p] - model.uf[j, z4, p]
+                                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                        order_idx += 1
+
+                                        expr = model.ddk[h] >= hBid.volume * model.udk[k] \
+                                               - hBid.volume * model.uf[i, z1, p] - hBid.volume * \
+                                               model.uf[z1, i, p] \
+                                               - hBid.volume * model.uf[z1, z2, p] - hBid.volume * \
+                                               model.uf[z2, z1, p] \
+                                               - hBid.volume * model.uf[z2, z3, p] - hBid.volume * \
+                                               model.uf[z3, z2, p] \
+                                               - hBid.volume * model.uf[z3, z4, p] - hBid.volume * \
+                                               model.uf[z4, z3, p] \
+                                               - hBid.volume * model.uf[z4, j, p] - hBid.volume * \
+                                               model.uf[j, z4, p]
+                                        setattr(model, "ATM_split_order_%d" % order_idx, Constraint(expr=expr))
+                                        order_idx += 1
+
+                                        #print book.bids[h].id, book.bids[k].id, self.zones[i].name, "->", self.zones[z1].name, "->", \
+                                        #    self.zones[z2].name, "->", self.zones[z3].name, "->", \
+                                        #    self.zones[z4].name, "->", self.zones[j].name
+
+
 
             if options.DEBUG:
-                logging.info("Done.")
+                logging.info("Created %d ATM split constraints" % order_idx)
 
         # if options.DEBUG:
         #     logging.info("Creating uf definitions" )
         #
         # order_idx_uf=0
-        # for (i,j,p) in model.Lpun*model.Lpun*model.periods:
+        # for (i,j,p) in model.LpunExt*model.LpunExt*model.periods:
         #     if model.flow_max[i,j,p]>0:
         #         # for the first constraint BigM=1, as long as UF_EPSILON < 1
         #         expr = model.f[i, j, p] <= model.flow_max[i, j, p] - UF_EPSILON + model.uf[i, j, p]
@@ -413,10 +635,12 @@ class PUN_DAM(DAM):
 
         if options.DEBUG:
             logging.info("Creating uf definitions")
-        if False and not relax_PUN:
-            model.p_uf_def = Constraint(model.Lpun, model.Lpun, model.periods, rule=p_uf_def_rule)
+        if options.SPLIT and not relax_PUN:
+            model.p_uf_def = Constraint(model.LpunExt, model.LpunExt, model.periods, rule=p_uf_def_rule)
 
         def p_pun_quantity_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             bid = book.bids[b]
             return m.dkpi[b] == m.ugk[b] * bid.volume + m.dwk[b] + m.ddk[b]
 
@@ -466,6 +690,8 @@ class PUN_DAM(DAM):
             logging.info("Creating lower level problem constraints")
 
         def p_max_PUN_demand_volume_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             return m.dwk[b] <= m.uwk[b] * book.bids[b].volume
 
         model.p_max_PUN_demand_volume = Constraint(model.punBids, rule=p_max_PUN_demand_volume_rule)
@@ -562,18 +788,24 @@ class PUN_DAM(DAM):
 
         # ugtk_pun
         def lin_ugtk_pun_first_LB_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             return -M_ugtk_pun_lower * m.ugk[b] <= m.yugPUNk[b]
 
         if not relax_PUN:
             model.lin_ugtk_pun_first_LB = Constraint(model.punBids, rule=lin_ugtk_pun_first_LB_rule)
 
         def lin_ugtk_pun_first_UB_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             return M_ugtk_pun_upper * m.ugk[b] >= m.yugPUNk[b]
 
         if not relax_PUN:
             model.lin_ugtk_pun_first_UB = Constraint(model.punBids, rule=lin_ugtk_pun_first_UB_rule)
 
         def lin_ugtk_pun_second_LB_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             bid = book.bids[b]
             return -M_ugtk_pun_lower * (1 - m.ugk[b]) <= m.pi[bid.period] - m.yugPUNk[b]
 
@@ -582,6 +814,8 @@ class PUN_DAM(DAM):
 
         def lin_ugtk_pun_second_UB_rule(m, b):
             bid = book.bids[b]
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return m.yugPUNk[b] == m.pi[bid.period]
             return M_ugtk_pun_upper * (1 - m.ugk[b]) >= m.pi[bid.period] - m.yugPUNk[b]
 
         if not relax_PUN:
@@ -589,18 +823,24 @@ class PUN_DAM(DAM):
 
         # ugtk_nonpun
         def lin_ugtk_nonpun_first_LB_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             return -M_ugtk_non_pun_lower * m.ugk[b] <= m.yugPzk[b]
 
         if not relax_PUN:
             model.lin_ugtk_nonpun_first_LB = Constraint(model.punBids, rule=lin_ugtk_nonpun_first_LB_rule)
 
         def lin_ugtk_nonpun_first_UB_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             return M_ugtk_non_pun_upper * m.ugk[b] >= m.yugPzk[b]
 
         if not relax_PUN:
             model.lin_ugtk_nonpun_first_UB = Constraint(model.punBids, rule=lin_ugtk_nonpun_first_UB_rule)
 
         def lin_ugtk_nonpun_second_LB_rule(m, b):
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return Constraint.Skip
             bid = book.bids[b]
             return -M_ugtk_non_pun_lower * (1 - m.ugk[b]) <= m.pZi[bid.location, bid.period] - m.yugPzk[b]
 
@@ -609,6 +849,8 @@ class PUN_DAM(DAM):
 
         def lin_ugtk_nonpun_second_UB_rule(m, b):
             bid = book.bids[b]
+            if book.bids[b].price == MAX_PRICE and not relax_PUN:
+                return m.yugPzk[b] == m.pZi[bid.location, bid.period]
             return M_ugtk_non_pun_upper * (1 - m.ugk[b]) >= m.pZi[bid.location, bid.period] - m.yugPzk[b]
 
         if not relax_PUN:
@@ -847,11 +1089,22 @@ class PUN_DAM(DAM):
         """
         Simple strategy: just call the solver
         """
-        options.SOLVER.solve(self.model, tee=VERBOSE)
+        results = options.SOLVER.solve(self.model, tee=VERBOSE)
+
+        # Detect infeasibility and relax feas. parameter
+        if results.solver.termination_condition == \
+                TerminationCondition.infeasible:
+            logging.info("Relaxing feasibility parameter.")
+            feas = options.SOLVER.options["simplex tolerances feasibility"]
+            options.SOLVER.options["simplex tolerances feasibility"] = 1e-6
+            results = options.SOLVER.solve(self.model, tee=VERBOSE)
+            logging.info("Restoring feasibility parameter.")
+            options.SOLVER.options["simplex tolerances feasibility"] = feas
+
         if len(self.model.solutions) != 0:
             self.t_solve = time.time() - self.t_solve_init
             logging.info("Time: %.2f" % self.t_solve)
-            self._build_solution()
+            self._build_solution(results)
         else:
             self.exportModel()
 
@@ -878,13 +1131,17 @@ class PUN_DAM(DAM):
         mip_solver.options["mircuts"] = 2
         mip_solver.options["flowcuts"] = 2
 
-        results = solver_manager.solve(self.model, opt=mip_solver,
-                                       tee=True, keepfiles=True)
+        if options.DEBUG:
+            for (k, v) in mip_solver.options.items():
+                print('mip_solver.options["%s"] = %s' % (k, v))
+
+        results = solver_manager.solve(self.model, opt=mip_solver, tee=True, keepfiles=False)
         if results.solver.termination_condition == TerminationCondition.optimal:
             logging.info("Solution found:  %s" % results.solver.termination_condition)
             self.t_solve = time.time() - self.t_solve_init
             logging.info("Time: %.2f" % self.t_solve)
-            self._build_solution()
+            results.neos = True
+            self._build_solution(results)
         else:
             logging.info("Error: Solver Termination Condition: %s" % results.solver.termination_condition)
 
@@ -901,6 +1158,11 @@ class PUN_DAM(DAM):
         # Create a copy
         dam_relaxed = self.loader.read_day(self.day_id)
         dam_relaxed.create_model(relax_PUN=True)
+
+        # reset time to exclude model generation
+        self.t_solve_init = time.time()
+        logging.info("Reset time to exclude model generation.")
+
         dam_relaxed.solve(VERBOSE=True, strategy='Simple')
 
         # Retrieve relaxed PUN prices from relaxed model
@@ -908,12 +1170,7 @@ class PUN_DAM(DAM):
         pun_prices = dam_relaxed.pun_prices()
         estimated_pun_prices_ranges = {}
         for p, v in relaxed_prices_by_period.iteritems():
-            if v < pun_prices[p][0] or v > pun_prices[p][1]:
-                estimated_pun_prices_ranges[p] = [v - 1.0, v + 1.0]
-            else:
-                estimated_pun_prices_ranges[p] = [v - options.EPS, v + options.EPS]
-
-        # estimated_pun_prices_ranges = {p, [v-1, v+1] for p, v in relaxed_prices_by_period.iteritems()}
+            estimated_pun_prices_ranges[p] = [v - 1.0, v + 1.0]
 
         logging.info("Estimated PUN price ranges : %s" % estimated_pun_prices_ranges)
 
@@ -921,35 +1178,50 @@ class PUN_DAM(DAM):
 
         self.fix_window(self.model, estimated_pun_prices_ranges)
         heuristic_sol = False
-        warm_file = "warmstart.mst"
-        options.SOLVER.solve(self.model, tee=VERBOSE, keepfiles=True, solnfile=warm_file, logfile="reduced.log")
+        warm_file = "warmstart.sol"
+
+        stored_gap = options.SOLVER.options["mip tolerances mipgap"]
+        options.SOLVER.options["mip tolerances mipgap"] = 1e-6
+        options.SOLVER.solve(self.model, tee=VERBOSE, keepfiles=True, solnfile=warm_file)
+        options.SOLVER.options["mip tolerances mipgap"] = stored_gap
+
         if len(self.model.solutions) != 0:
             heuristic_sol = True
             self.t_solve = time.time() - self.t_solve_init
             logging.info("Time: %.2f" % self.t_solve)
 
         logging.info("ASM phase 3 of 3: Proving optimality")
-        unexplored_pun_prices_ranges = {p: [0.0, v[1]] for p, v in estimated_pun_prices_ranges.iteritems()}
-        self.fix_window(self.model, unexplored_pun_prices_ranges)
 
-        options.SOLVER.solve(self.model, tee=VERBOSE, keepfiles=True,
+        self.nbinvar = self.nbinvar_initial
+
+        self.fix_window(self.model)
+        results = options.SOLVER.solve(self.model, tee=VERBOSE, keepfiles=False,
                              solnfile="full.sol", logfile="full.log",
                              warmstart=heuristic_sol, warmstart_file=warm_file)
 
         if len(self.model.solutions) != 0:
             self.t_solve = time.time() - self.t_solve_init
             logging.info("Time: %.2f" % self.t_solve)
-            self._build_solution()
+            self._build_solution(results)
         else:
             self.exportModel()
             raise Exception('No solution found when clearing the day-ahead energy market.')
 
-    def _build_solution(self):
+    def _build_solution(self, results=None):
         """
         Store the solution of the day-ahead market in the order book.
         """
         model = self.model
         book = self.orders
+
+        self.absolute_gap = 1e9
+        if results:
+            self.absolute_gap = results["Problem"][0]["Upper bound"] - results["Problem"][0]["Lower bound"]
+            if hasattr(results, "neos"): # NEOS does not report upper and lower values
+                self.solver_message = results["Solver"][0]["Message"]
+                logging.info("Solver Message : %s" % self.solver_message)
+            elif options.DEBUG:
+                logging.info("Absolute gap : %s" % self.absolute_gap)
 
         book.volumes = {s: {l: {t: 0.0 for t in book.periods} for l in model.L} for s in ['SUPPLY', 'DEMAND']}
 

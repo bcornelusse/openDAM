@@ -64,7 +64,11 @@ GME Data
 ========
 
 Raw data for the GME market can be obtained `here. <https://dox.uliege.be/index.php/s/IcRkhmfBZqzIBRJ>`__
-You can import this data by running ``python openDAM/dataio/GME_xml_importer.py``.
+You can import this data by running ``python openDAM/dataio/GME_xml_importer.py --split -p data/ -d test.sqlite3 --from_date=20180110 --to_date=20180110``.
+The ``--split`` option generates a problem per period.
+
+Then you can run from the master directory
+``python openDAM -p openDAM\dataio -d test.sqlite3 -c 2018011019 --pun_strategy=Advanced``
 
 ==============================
 Generating random block orders

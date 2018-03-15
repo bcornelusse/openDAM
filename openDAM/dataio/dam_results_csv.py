@@ -42,7 +42,7 @@ class CSV_writer:
         self.pun = open('%s/pun_results_PD.csv' % self.path, status)
 
     def write_headers(self):
-        self.welfare.write('DAY_ID,WELFARE,TIME,NBIN,EXPANSION\n')
+        self.welfare.write('DAY_ID,WELFARE,TIME,NBIN,EXPANSION,ABSOLUTE_GAP\n')
         self.prices.write('DAY_ID,ZONE_ID,ZONE_NAME,PERIOD,PRICE,MATCHED_SUPPLY_VOLUME,MATCHED_DEMAND_VOLUME\n')
         self.line.write('DAY_ID,LINE_ID, descritption, direction, value\n')
         self.complex.write('DAY_ID,COMPLEX_ID,ACCEPT,SURPLUS,\n')
@@ -55,7 +55,10 @@ class CSV_writer:
         day = dam.day_id
         logging.info('Updating results for day %d' % day)
 
-        self.welfare.write('%d,%f,%.2f,%d,%d\n' % (day, dam.welfare, dam.t_solve, dam.nbinvar, dam.expansion))
+        if not hasattr(dam, "solver_message"):
+            self.welfare.write('%d,%f,%.2f,%d,%d, %.2f\n' % (day, dam.welfare, dam.t_solve, dam.nbinvar, dam.expansion, dam.absolute_gap))
+        else:
+            self.welfare.write('%d,%f,%.2f,%d,%d, %s\n' % (day, dam.welfare, dam.t_solve, dam.nbinvar, dam.expansion, dam.solver_message))
 
         # WRITE price results
         all_zones = dam.zones.keys()
@@ -64,7 +67,7 @@ class CSV_writer:
             v_s = dam.volumes("SUPPLY", zone)
             v_d = dam.volumes("DEMAND", zone)
             for period in sorted(p.keys()):
-                self.prices.write('%d,%d,%s,%d,%.2f,%.3f,%.3f\n' % (day, zone, dam.zones[zone].name, period, p[period], v_s[period], v_d[period]))
+                self.prices.write('%d,%d,%s,%d,%.6f,%.3f,%.3f\n' % (day, zone, dam.zones[zone].name, period, p[period], v_s[period], v_d[period]))
 
         if isinstance(dam, PUN_DAM):
             zone = 0

@@ -15,6 +15,7 @@ STDEV_PRICE = 10
 
 
 def populate_block_orders(connection, day_id):
+
     block_id = 0
 
     for zone, zone_id in PUN_ZONES.iteritems():
@@ -39,7 +40,6 @@ def populate_block_orders(connection, day_id):
         conn.commit()
 
         print(block_id)
-
 
 if __name__ == "__main__":
     parser = ArgumentParser(

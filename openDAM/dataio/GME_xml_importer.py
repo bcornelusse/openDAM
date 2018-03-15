@@ -3,7 +3,6 @@
 
 import sqlite3
 from argparse import ArgumentParser
-
 from lxml import etree
 import zipfile
 import os
@@ -111,7 +110,6 @@ class GMEImporter:
         Read bids contained in file yyyymmddMGPOffertePubbliche.xml and dispatch by type (PUN, demand, supply)
 
         """
-
 
         # Unzip
         zip_file_path = self.path + u'/%sMGPOffertePubbliche.zip' % self.date
@@ -427,24 +425,29 @@ if __name__ == "__main__":
     parser.add_argument("--append",
                         help="Append to existing database",
                         default=False)
+    parser.add_argument("--split",
+                        help="Split daily data hour by hour",
+                        action="store_true",
+                        default=False)
 
     args = parser.parse_args()
 
     path = args.path
     database_name = args.database
 
-    if args.append and database_name in os.listdir('.'):
+    if not args.append and database_name in os.listdir('.'):
         os.remove(database_name)
 
     conn = sqlite3.connect(database_name)
 
-    if args.append:
+    if not args.append:
         create_tables(conn)
 
     for date in range(int(args.from_date), int(args.to_date)+1):
         date_str = str(date)
         print("Importing PUN data for day %s " % date_str)
         importer = GMEImporter(path, date_str)
-        importer.to_sql(conn, split_by_period=False)
+        importer.to_sql(conn, split_by_period=args.split)
 
     conn.close()
+
