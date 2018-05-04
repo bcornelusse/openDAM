@@ -63,12 +63,31 @@ Running the application
 GME Data
 ========
 
-Raw data for the GME market can be obtained `here. <https://dox.uliege.be/index.php/s/IcRkhmfBZqzIBRJ>`__
-You can import this data by running ``python openDAM/dataio/GME_xml_importer.py --split -p data/ -d test.sqlite3 --from_date=20180110 --to_date=20180110``.
+The Italian market data can be freely downloaded from the website of the Italian market operator.
+The raw data required to run the model is stored in 4 different XML files, named:
+
+1. YYYYMMDDMGPOffertePubbliche.xml, located in a zip file named YYYYMMDDMGPOffertePubbliche.zip, contained in another zip file named YYYYMMDDOfferteFree_Pubbliche.zip. The xml file contains the real market order data;
+2. YYYYMMDDMGPLimitiTransito.xml, containing the network capacity limits;
+3. YYYYMMDDMGPPrezzi.xml , containing the official prices used for comparison;
+4. YYYYMMDDMGPQuantita, containing the flows coming from the non-GME zones;
+
+where YYYYMMDD is the date of the requested day in the format: year, month and day.
+These files can be freely downloaded from the following links, for example for January 27th, 2018:
+
+1. https://www.mercatoelettrico.org/en/Download/DownloadDati.aspx?val=OfferteFree_Pubbliche
+2. https://www.mercatoelettrico.org/It/WebServerDataStore/MGP_LimitiTransito/20180127MGPLimitiTransito.xml
+3. https://www.mercatoelettrico.org/It/WebServerDataStore/MGP_Prezzi/20180127MGPPrezzi.xml
+4. https://www.mercatoelettrico.org/It/WebServerDataStore/MGP_Quantita/20180127MGPQuantita.xml
+
+Then, they can be imported into a suitable SQL database by running the Python script GME_xml_importer.py.
+
+Assuming your data is in the folder ``data``, you can do this by running ``python openDAM/dataio/GME_xml_importer.py --split -p data/ -d test.sqlite3 --from_date=20180110 --to_date=20180110``.
 The ``--split`` option generates a problem per period.
 
 Then you can run from the master directory
 ``python openDAM -p openDAM\dataio -d test.sqlite3 -c 2018011019 --pun_strategy=Advanced``
+
+See also ``GME_xml_importer.py --help`` for further details.
 
 ==============================
 Generating random block orders
